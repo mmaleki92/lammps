@@ -26,7 +26,7 @@ using namespace FixConst;
 /* ---------------------------------------------------------------------- */
 
 FixVicsek::FixVicsek(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg) {
-    if (narg != 8) error->all(FLERR, "Illegal fix vicsek command");
+    if (narg != 7) error->all(FLERR, "Illegal fix vicsek command");
 
     noise_strength = utils::numeric(FLERR, arg[3], false, lmp);
     v_active = utils::numeric(FLERR, arg[4], false, lmp);
@@ -104,24 +104,20 @@ void FixVicsek::initial_integrate(int vflag) {
 
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
-            // Normalize average orientation and add noise
             double norm = sqrt(avg_orient_x[i] * avg_orient_x[i] + avg_orient_y[i] * avg_orient_y[i]);
-            double noise_angle = noise_strength * (random->uniform() - 0.5) * 2 * M_PI;
-
             if (norm > 0) {
+                double noise_angle = noise_strength * (random->uniform() - 0.5) * 2 * M_PI;
                 mu[i][0] = avg_orient_x[i] / norm * cos(noise_angle) - avg_orient_y[i] / norm * sin(noise_angle);
                 mu[i][1] = avg_orient_x[i] / norm * sin(noise_angle) + avg_orient_y[i] / norm * cos(noise_angle);
+            } else {
+                // Handle case where norm == 0 (e.g., assign random orientation)
+                double angle = 2 * M_PI * random->uniform();
+                mu[i][0] = cos(angle);
+                mu[i][1] = sin(angle);
             }
-
-            // Update positions based on velocity and orientation
             x[i][0] += v_active * mu[i][0] * dt;
             x[i][1] += v_active * mu[i][1] * dt;
-            x[i][2] = 0.0;
-
-            // Calculate and update velocities
-            v[i][0] = v_active * mu[i][0];
-            v[i][1] = v_active * mu[i][1];
-            v[i][2] = 0.0;
         }
     }
+
 }
