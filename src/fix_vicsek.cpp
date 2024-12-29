@@ -58,74 +58,66 @@ void FixVicsek::init() {
 }
 
 /* ---------------------------------------------------------------------- */
+
 void FixVicsek::initial_integrate(int vflag) {
     double **x = atom->x;
-    double **mu = atom->mu; // Orientation vectors
+    double **v = atom->v;
+    double **f = atom->f;
+    double **mu = atom->mu;  // Orientation vectors
     int *mask = atom->mask;
     int nlocal = atom->nlocal;
 
     double dt = update->dt;
+    double sqrtdt = sqrt(dt);
 
     // Temporary storage for new directions
     std::vector<double> avg_orient_x(nlocal, 0.0);
     std::vector<double> avg_orient_y(nlocal, 0.0);
-    std::vector<int> neighbor_counts(nlocal, 0);
 
-    // Access the neighbor list
-    int **neighbors = neighbor->firstneigh;
-    int *num_neighbors = neighbor->numneigh;
-
-    // Loop through each particle
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
             double sum_x = 0.0;
             double sum_y = 0.0;
-            int count = 0;
+            int neighbor_count = 0;
 
-            // Loop over neighbors of particle i
-            for (int jj = 0; jj < num_neighbors[i]; jj++) {
-                int j = neighbors[i][jj];
+            // Calculate average orientation of neighbors
+            for (int j = 0; j < nlocal; j++) {
                 if (mask[j] & groupbit) {
-                    sum_x += mu[j][0];
-                    sum_y += mu[j][1];
-                    count++;
+                    double dx = x[j][0] - x[i][0];
+                    double dy = x[j][1] - x[i][1];
+                    double r = sqrt(dx * dx + dy * dy);
+
+                    if (r < neighbor_radius) {
+                        sum_x += mu[j][0];
+                        sum_y += mu[j][1];
+                        neighbor_count++;
+                    }
                 }
             }
 
-            if (count > 0) {
-                avg_orient_x[i] = sum_x / count;
-                avg_orient_y[i] = sum_y / count;
-                neighbor_counts[i] = count;
+            if (neighbor_count > 0) {
+                avg_orient_x[i] = sum_x / neighbor_count;
+                avg_orient_y[i] = sum_y / neighbor_count;
             }
         }
     }
 
-    // Update positions and orientations
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
             double norm = sqrt(avg_orient_x[i] * avg_orient_x[i] + avg_orient_y[i] * avg_orient_y[i]);
             if (norm > 0) {
-                // Add noise to the orientation
                 double noise_angle = noise_strength * (random->uniform() - 0.5) * 2 * M_PI;
                 mu[i][0] = avg_orient_x[i] / norm * cos(noise_angle) - avg_orient_y[i] / norm * sin(noise_angle);
                 mu[i][1] = avg_orient_x[i] / norm * sin(noise_angle) + avg_orient_y[i] / norm * cos(noise_angle);
             } else {
-                // Assign a random orientation if norm is zero
+                // Handle case where norm == 0 (e.g., assign random orientation)
                 double angle = 2 * M_PI * random->uniform();
                 mu[i][0] = cos(angle);
                 mu[i][1] = sin(angle);
             }
-
-            // Update position based on velocity and orientation
             x[i][0] += v_active * mu[i][0] * dt;
             x[i][1] += v_active * mu[i][1] * dt;
         }
     }
 
-    // Apply periodic boundary conditions
-    for (int i = 0; i < nlocal; i++) {
-        if (mask[i] & groupbit) {
-            domain->remap(x[i]);
-        }
-    }
 }
