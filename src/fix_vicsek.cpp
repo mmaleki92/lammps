@@ -115,6 +115,12 @@ void FixVicsek::initial_integrate(int vflag) {
                 mu[i][0] = cos(angle);
                 mu[i][1] = sin(angle);
             }
+
+                        // Calculate velocity based on active velocity and orientation
+            v[i][0] = v_active * mu[i][0];
+            v[i][1] = v_active * mu[i][1];
+            v[i][2] = 0.0;  // Assuming 2D dynamics, no velocity in z-direction
+
             x[i][0] += v_active * mu[i][0] * dt;
             x[i][1] += v_active * mu[i][1] * dt;
         }
