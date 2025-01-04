@@ -19,6 +19,7 @@
 #include "memory.h"
 #include "error.h"
 #include "group.h"
+#include <omp.h>
 
 using namespace LAMMPS_NS;
 using namespace FixConst;
@@ -59,6 +60,7 @@ void FixVicsek::init() {
 
 /* ---------------------------------------------------------------------- */
 
+
 void FixVicsek::initial_integrate(int vflag) {
     double **x = atom->x;
     double **v = atom->v;
@@ -74,6 +76,8 @@ void FixVicsek::initial_integrate(int vflag) {
     std::vector<double> avg_orient_x(nlocal, 0.0);
     std::vector<double> avg_orient_y(nlocal, 0.0);
 
+    // Parallelize the outer loop
+    #pragma omp parallel for
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
             double sum_x = 0.0;
@@ -102,6 +106,7 @@ void FixVicsek::initial_integrate(int vflag) {
         }
     }
 
+    // Loop for updating orientation and velocity
     for (int i = 0; i < nlocal; i++) {
         if (mask[i] & groupbit) {
             double norm = sqrt(avg_orient_x[i] * avg_orient_x[i] + avg_orient_y[i] * avg_orient_y[i]);
@@ -116,7 +121,7 @@ void FixVicsek::initial_integrate(int vflag) {
                 mu[i][1] = sin(angle);
             }
 
-                        // Calculate velocity based on active velocity and orientation
+            // Calculate velocity based on active velocity and orientation
             v[i][0] = v_active * mu[i][0];
             v[i][1] = v_active * mu[i][1];
             v[i][2] = 0.0;  // Assuming 2D dynamics, no velocity in z-direction
@@ -125,5 +130,4 @@ void FixVicsek::initial_integrate(int vflag) {
             x[i][1] += v_active * mu[i][1] * dt;
         }
     }
-
 }
