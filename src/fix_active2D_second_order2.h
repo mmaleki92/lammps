@@ -9,6 +9,7 @@ FixStyle(active2dsecondorder2,Fixactive2DSecondOrder2)
 
 #include "fix.h"
 
+
 namespace LAMMPS_NS {
 
 class Fixactive2DSecondOrder2 : public Fix {
@@ -18,22 +19,22 @@ class Fixactive2DSecondOrder2 : public Fix {
   int setmask();
   virtual void init();
   virtual void initial_integrate(int);
-
+  virtual void final_integrate();
+  // void grow_arrays(int nmax);
 
  private: 
- double dt, sqrtdt;
+  double dt, sqrtdt;
+  double **eta;  // Add eta declaration
 
  protected:
   class RanMars *random;
   int seed;
-  double t_start,t_stop,t_period,t_target,tsqrt;
-  double gamma1,gamma2,gamma3;
-  double D_t, D_r,cosphi,sinphi;
-  double zeta;  // Friction coefficient
+  double mass, t_start, t_stop, t_period, t_target, tsqrt, zeta, Fa, T;
+  double gamma1, gamma2, gamma3;
+  double D_t, D_r, cosphi, sinphi;  // D_r is declared here
   double v_active;
   char *id_temp;
   void compute_target();
-
 };
 
 }
