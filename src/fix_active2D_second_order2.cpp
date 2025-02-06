@@ -34,6 +34,9 @@ Fixactive2DSecondOrder2::Fixactive2DSecondOrder2(LAMMPS *lmp, int narg, char **a
     seed = utils::numeric(FLERR, arg[7], false, lmp);
     if (seed <= 0) error->all(FLERR, "Illegal fix active_2d command");
 
+    if (!atom->mu_flag)
+        error->all(FLERR, "Fix active2D requires atom style with dipole");
+
     random = new RanMars(lmp, seed + comm->me);
     atom->add_callback(Atom::GROW);
 
@@ -115,17 +118,18 @@ void Fixactive2DSecondOrder2::initial_integrate(int vflag) {
     const double noise_scale = sqrt(zeta * T * dt / mass);
     const double dt_half_mass = 0.5 * dt / mass;
 
-
-    if (step  <= 1) {
-      for (int i = 0; i < nlocal; i++) {
-        double angle = 2 * M_PI * random->uniform();
-        mu[i][0] = cos(angle);  // x-component of orientation
-        mu[i][1] = sin(angle);  // y-component of orientation
-        mu[i][2] = 0.0;
-        v[i][0] = 0.0;  // x-component of orientation
-        v[i][1] = 0.0;  // y-component of orientation
-        v[i][2] = 0.0;
-      }
+    if (step <= 1) {
+        for (int i = 0; i < nlocal; i++) {
+            if (mask[i] & groupbit) {
+                double angle = 2 * M_PI * random->uniform();
+                mu[i][0] = cos(angle);  // x-component of orientation
+                mu[i][1] = sin(angle);  // y-component of orientation
+                mu[i][2] = 0.0;
+                v[i][0] = 0.0;  // x-component of velocity
+                v[i][1] = 0.0;  // y-component of velocity
+                v[i][2] = 0.0;
+            }
+        }
     }
 
     for (int i = 0; i < nlocal; ++i) {
@@ -203,4 +207,3 @@ void Fixactive2DSecondOrder2::final_integrate() {
         }
     }
 }
-

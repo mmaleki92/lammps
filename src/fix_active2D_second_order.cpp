@@ -1,8 +1,3 @@
-/* ----------------------------------------------------------------------
-   LAMMPS - Large-scale Atomic/Molecular Massively Parallel Simulator
-   Fix for second-order active Brownian particles (2D)
-------------------------------------------------------------------------- */
-
 #include "fix_active2D_second_order.h"
 #include <mpi.h>
 #include <cmath>
@@ -28,9 +23,7 @@
 using namespace LAMMPS_NS;
 using namespace FixConst;
 
-/* ----------------------------------------------------------------------
-   Cross product function for 2D vectors, keeping z=0
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
 void crossProduct2D2ndOrder(double v_A[], double v_B[], double c_P[]) {
   c_P[0] = v_A[1] * v_B[2] - v_A[2] * v_B[1];
@@ -38,69 +31,52 @@ void crossProduct2D2ndOrder(double v_A[], double v_B[], double c_P[]) {
   c_P[2] = v_A[0] * v_B[1] - v_A[1] * v_B[0];
 }
 
-/* ----------------------------------------------------------------------
-   Constructor for the fix, reading parameters and setting initial values
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
-Fixactive2DSecondOrder::Fixactive2DSecondOrder(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg)
-{
+Fixactive2DSecondOrder::Fixactive2DSecondOrder(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg) {
   if (narg != 10) error->all(FLERR, "Illegal fix active_2d command");
 
   t_start = utils::numeric(FLERR, arg[3], false, lmp);
   t_target = t_start;
   t_stop = utils::numeric(FLERR, arg[4], false, lmp);
-
-  D_t = utils::numeric(FLERR, arg[5], false, lmp);    // Translational diffusion
-  if (D_t <= 0.0) error->all(FLERR, "Fix bd, D_t must be > 0.0");
-
-  D_r = utils::numeric(FLERR, arg[6], false, lmp);    // Rotational diffusion
+  D_t = utils::numeric(FLERR, arg[5], false, lmp);  // Diffusion coefficient
+  if (D_t <= 0.0) error->all(FLERR, "Fix bd diffusion coefficient must be > 0.0");
+  D_r = utils::numeric(FLERR, arg[6], false, lmp);  // Rotational Diffusion coefficient
   v_active = utils::numeric(FLERR, arg[7], false, lmp);  // Active velocity
-  seed = utils::numeric(FLERR, arg[8], false, lmp);      // Random seed
+  seed = utils::numeric(FLERR, arg[8], false, lmp);  // Seed for random number generator
   if (seed <= 0) error->all(FLERR, "Illegal fix active_2d command");
-  
-  zeta = utils::numeric(FLERR, arg[9], false, lmp);      // Zeta (drag)
+  zeta = utils::numeric(FLERR, arg[9], false, lmp);  // Zeta value
   if (zeta <= 0.0) error->all(FLERR, "Zeta must be > 0.0");
 
-  // Create a random number generator for each MPI rank
   random = new RanMars(lmp, seed + comm->me);
 }
 
-/* ----------------------------------------------------------------------
-   Destructor
-------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------- */
 
 Fixactive2DSecondOrder::~Fixactive2DSecondOrder() {
   delete random;
 }
 
-/* ----------------------------------------------------------------------
-   Setmask: determines which parts of the integration process this fix covers
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
 int Fixactive2DSecondOrder::setmask() {
   int mask = 0;
-  // Use both INITIAL_INTEGRATE (for the half-step velocity update + position update)
-  // and FINAL_INTEGRATE (for the final half-step velocity update), if desired:
   mask |= INITIAL_INTEGRATE;
-  mask |= FINAL_INTEGRATE;
   return mask;
 }
 
-/* ----------------------------------------------------------------------
-   Init function: compute the target temperature and precompute constants
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
 void Fixactive2DSecondOrder::init() {
   compute_target();
-  
-  // Example usage of gamma1, gamma2, gamma3, etc., if needed
-  gamma1 = D_t;              
-  gamma2 = sqrt(2 * D_t);    
-  gamma3 = sqrt(2 * 3 * D_t);
+  gamma1 = D_t;  // Translational diffusion coefficient
+  gamma2 = sqrt(2 * D_t);  // Scaling for random translational force
+  gamma3 = sqrt(2 * 3 * D_t);  // Scaling for random rotational force
 }
 
 /* ----------------------------------------------------------------------
-   Update target temperature T(t) if needed
+   Compute target temperature for simulation
 ------------------------------------------------------------------------- */
 
 void Fixactive2DSecondOrder::compute_target() {
@@ -110,144 +86,79 @@ void Fixactive2DSecondOrder::compute_target() {
 }
 
 /* ----------------------------------------------------------------------
-   INITIAL_INTEGRATE stage:
-   1) Velocity half-step update
-   2) Position full-step update
-   3) Orientation update (if you handle it here)
+   Integration step for updating particle positions and orientations
 ------------------------------------------------------------------------- */
 
-void Fixactive2DSecondOrder::initial_integrate(int /*vflag*/) {
+void Fixactive2DSecondOrder::initial_integrate(int vflag) {
   double **x = atom->x; 
   double **v = atom->v;
   double **f = atom->f;
-  double **mu = atom->mu;   // Orientation vectors
+  double **mu = atom->mu;  // Orientation vectors
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
-
-  // Basic simulation parameters
   int step = update->ntimestep;
-  double dt = update->dt;            // Timestep
-  double half_dt = 0.5 * dt;         // Half-step
-  double zeta_inv = 1.0 / zeta;      // Inverse drag (if used)
-  
-  // Non-dimensionalization references (example):
-  double mass = 1.0;        // mass for each particle (example assumption)
-  double sigma = 1.0;       // length scale
-  double epsilon = 1.0;     // energy scale
-  double tau = sqrt(mass * sigma * sigma / epsilon);  
-  double dt_nd = dt / tau;  
-  double F_a = zeta * v_active;      // typical active force
-  double F_a_nd = F_a * sigma / epsilon; 
-  double T_nd = 1.0 / epsilon;       // example if KT=1.0
-  double zeta_nd = zeta * tau / mass;
-  double D_r_nd = D_r * tau;
+  double dt = update->dt; // Time step
+  double sqrtdt = sqrt(dt); // Square root of time step
+  double gamma_t = 1.0 / D_t; // Translational friction (gamma = 1/D_t)
+  double gamma_r = 1.0 / D_r; // Rotational friction
+  double mass = 1.0;               // Particle mass (assuming m = 1 for simplicity)
+  // double sqrt_2gamma_kBT = sqrt(2.0 * gamma_t * t_target);  // Noise term for Langevin thermostat
+  // double zeta = 10.0;
+  double KT = 1.0;
 
-  // Optionally limit integration to the "firstgroup" subset
-  if (igroup == atom->firstgroup) nlocal = atom->nfirst;
-
-  // Initialize orientations if at the beginning of the run
-  if (step <= 1) {
-    for (int i = 0; i < nlocal; i++) {
-      if (mask[i] & groupbit) {
-        double angle = 2.0 * M_PI * random->uniform();
-        mu[i][0] = cos(angle);
-        mu[i][1] = sin(angle);
-        mu[i][2] = 0.0;
-        v[i][0] = 0.0;
-        v[i][1] = 0.0;
-        v[i][2] = 0.0;
-      }
-    }
-  }
-
-  // Main integration loop
-  for (int i = 0; i < nlocal; i++) {
-    if (mask[i] & groupbit) {
-      // --------------------------------
-      // 1) Velocity half-step update
-      //    Here we incorporate active force, damping, random force, etc.
-      // --------------------------------
-      double noise_x = sqrt(2.0 * zeta_nd * T_nd * dt_nd) * random->gaussian();
-      double noise_y = sqrt(2.0 * zeta_nd * T_nd * dt_nd) * random->gaussian();
-
-      // Convert LAMMPS' force f[i] to nondimensional if necessary
-      // Example: f_nd = f[i][0]/epsilon for x-component, etc.
-
-      double fx_nd = (f[i][0] / epsilon) - (zeta_nd * v[i][0]) + (F_a_nd * mu[i][0]);
-      double fy_nd = (f[i][1] / epsilon) - (zeta_nd * v[i][1]) + (F_a_nd * mu[i][1]);
-
-      // Velocity half-step
-      v[i][0] += half_dt * fx_nd + noise_x * 0.5; 
-      v[i][1] += half_dt * fy_nd + noise_y * 0.5; 
-      v[i][2] = 0.0;  // Remain 2D
-
-      // --------------------------------
-      // 2) Position full-step update
-      //    Multiply by sigma to convert back to real length units
-      // --------------------------------
-      x[i][0] += dt * v[i][0] * sigma;
-      x[i][1] += dt * v[i][1] * sigma;
-      x[i][2]  = 0.0;
-
-      // --------------------------------
-      // 3) Orientation update
-      //    For 2D, we track a single angle or directly update mu[].
-      //    Rotational diffusion: dtheta = sqrt(2 D_r_nd dt_nd) ...
-      // --------------------------------
-      double dtheta = sqrt(2.0 * D_r_nd * dt_nd) * random->gaussian();
-      double cos_dtheta = cos(dtheta);
-      double sin_dtheta = sin(dtheta);
-      double mu_old_x = mu[i][0];
-      double mu_old_y = mu[i][1];
-
-      mu[i][0] = mu_old_x * cos_dtheta - mu_old_y * sin_dtheta;
-      mu[i][1] = mu_old_x * sin_dtheta + mu_old_y * cos_dtheta;
-      mu[i][2] = 0.0;
-    }
-  }
-}
-
-/* ----------------------------------------------------------------------
-   FINAL_INTEGRATE stage:
-   4) Velocity final half-step update
-------------------------------------------------------------------------- */
-
-void Fixactive2DSecondOrder::final_integrate() {
-  double **v = atom->v;
-  double **f = atom->f;
-  double **mu = atom->mu;
-  int *mask = atom->mask;
-  int nlocal = atom->nlocal;
-
-  double dt = update->dt;
-  double half_dt = 0.5 * dt;
-
-  // Non-dimensional references (match initial_integrate)
-  double mass = 1.0;
+  double F_a = zeta * v_active;
+  double m = 1.0;
   double sigma = 1.0;
   double epsilon = 1.0;
   double tau = sqrt(mass * sigma * sigma / epsilon);
-  double dt_nd = dt / tau;
-  double F_a = zeta * v_active;
+  // Compute non-dimensional parameters
+  double D_t_nd = D_t * tau / (sigma * sigma);
+  double D_r_nd = D_r * tau;
   double F_a_nd = F_a * sigma / epsilon;
-  double T_nd = 1.0 / epsilon;
-  double zeta_nd = zeta * tau / mass;
-
+  double T_nd = KT / epsilon;
+  double zeta_nd = zeta * tau / m;
+  double dt_nd = dt / tau;
   if (igroup == atom->firstgroup) nlocal = atom->nfirst;
 
-  // Final half-step velocity update
-  for (int i = 0; i < nlocal; i++) {
-    if (mask[i] & groupbit) {
-      double noise_x = sqrt(2.0 * zeta_nd * T_nd * dt_nd) * random->gaussian();
-      double noise_y = sqrt(2.0 * zeta_nd * T_nd * dt_nd) * random->gaussian();
 
-      double fx_nd = (f[i][0] / epsilon) - (zeta_nd * v[i][0]) + (F_a_nd * mu[i][0]);
-      double fy_nd = (f[i][1] / epsilon) - (zeta_nd * v[i][1]) + (F_a_nd * mu[i][1]);
-
-      // Final half-step velocity update
-      v[i][0] += half_dt * fx_nd + noise_x * 0.5; 
-      v[i][1] += half_dt * fy_nd + noise_y * 0.5;
+  // Initialize orientations at the start of the simulation
+  if (step  <= 1) {
+    for (int i = 0; i < nlocal; i++) {
+      double angle = 2 * M_PI * random->uniform();
+      mu[i][0] = cos(angle);  // x-component of orientation
+      mu[i][1] = sin(angle);  // y-component of orientation
+      mu[i][2] = 0.0;
+      v[i][0] = 0.0;  // x-component of orientation
+      v[i][1] = 0.0;  // y-component of orientation
       v[i][2] = 0.0; 
     }
+  }
+
+  // Integration step for particle motion
+  for (int i = 0; i < nlocal; i++) {
+      if (mask[i] & groupbit) {
+          // Update orientation
+          double dtheta = sqrt(2.0 * D_r_nd * dt_nd) * random->gaussian();
+          double cos_dtheta = cos(dtheta);
+          double sin_dtheta = sin(dtheta);
+          double mu_x = mu[i][0];
+          double mu_y = mu[i][1];
+          mu[i][0] = mu_x * cos_dtheta - mu_y * sin_dtheta;
+          mu[i][1] = mu_x * sin_dtheta + mu_y * cos_dtheta;
+
+          // Compute forces and noise
+          double noise_x = sqrt(2.0 * zeta_nd * T_nd * dt_nd) * random->gaussian();
+          double noise_y = sqrt(2.0 * zeta_nd * T_nd * dt_nd) * random->gaussian();
+
+          // Update velocity
+          v[i][0] += dt_nd * ((f[i][0] / epsilon - zeta_nd * v[i][0] + F_a_nd * mu[i][0])) + noise_x;
+          v[i][1] += dt_nd * ((f[i][1] / epsilon - zeta_nd * v[i][1] + F_a_nd * mu[i][1])) + noise_y;
+          v[i][2] = 0;        // Velocity in z direction (2D simulation)
+
+          // Update position
+          x[i][0] += v[i][0] * dt_nd * sigma;
+          x[i][1] += v[i][1] * dt_nd * sigma;
+          x[i][2] = 0;  // Assuming 2D
+      }
   }
 }
